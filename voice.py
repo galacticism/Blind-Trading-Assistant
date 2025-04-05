@@ -16,30 +16,24 @@ from nltk.tokenize import word_tokenize
 import audioop
 from array import array
 
-# Load environment variables (not needed now but kept for future)
 load_dotenv()
 
-# Download NLTK resources
 nltk.download('punkt', quiet=True)
 
-# Initialize Whisper model for speech recognition
 print("Loading Whisper model (this might take a moment)...")
-whisper_model = whisper.load_model("base")  # Options: tiny, base, small, medium, large
+whisper_model = whisper.load_model("base")
 print("Whisper model loaded!")
 
-# Initialize text-to-speech engine
 engine = pyttsx3.init()
 
-# Audio recording settings
 CHUNK = 1024
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
 RATE = 16000
-SILENCE_THRESHOLD = 300  # Adjust this value as needed
-SILENCE_DURATION = 1.5  # Number of seconds of silence to determine end of speech
-MAX_RECORD_SECONDS = 30  # Maximum recording time to prevent infinite recording
+SILENCE_THRESHOLD = 300
+SILENCE_DURATION = 1.5
+MAX_RECORD_SECONDS = 30
 
-# Load CSV files
 def load_csv_files():
     """Load all economic indicator CSV files"""
     data = {}
@@ -57,7 +51,7 @@ def load_csv_files():
         print(f"Error loading CSV files: {e}")
         return None
 
-# Economic indicators and their corresponding CSV file keys and display names
+# economic indicators if you guys know some more feel free to add, idk much
 INDICATORS = {
     "unemployment": {
         "data_key": "unemployment", 
@@ -65,7 +59,7 @@ INDICATORS = {
         "column": "LRUN64TTUSQ156S",
         "unit": "%",
         "description": "the percentage of the labor force that is jobless and actively seeking employment",
-        "change_type": "percentage_point"  # Use percentage point change (subtract)
+        "change_type": "percentage_point" 
     },
     "unemployment rate": {
         "data_key": "unemployment", 
@@ -73,7 +67,7 @@ INDICATORS = {
         "column": "LRUN64TTUSQ156S",
         "unit": "%",
         "description": "the percentage of the labor force that is jobless and actively seeking employment",
-        "change_type": "percentage_point"  # Use percentage point change (subtract)
+        "change_type": "percentage_point"
     },
     "gdp": {
         "data_key": "rgdp", 
@@ -81,7 +75,7 @@ INDICATORS = {
         "column": "GDPC1",
         "unit": "billion dollars",
         "description": "the inflation-adjusted value of all goods and services produced by the economy",
-        "change_type": "absolute"  # Use absolute change (subtract)
+        "change_type": "absolute"
     },
     "real gdp": {
         "data_key": "rgdp", 
@@ -89,7 +83,7 @@ INDICATORS = {
         "column": "GDPC1",
         "unit": "billion dollars",
         "description": "the inflation-adjusted value of all goods and services produced by the economy",
-        "change_type": "absolute"  # Use absolute change (subtract)
+        "change_type": "absolute"
     },
     "industrial production": {
         "data_key": "industrial_production", 
@@ -97,7 +91,7 @@ INDICATORS = {
         "column": "INDPRO",
         "unit": "index (2017=100)",
         "description": "a measure of output from manufacturing, mining, electric and gas utilities",
-        "change_type": "percentage"  # Use percentage change
+        "change_type": "percentage"
     },
     "investment": {
         "data_key": "investment", 
@@ -105,7 +99,7 @@ INDICATORS = {
         "column": "GPDI",
         "unit": "billion dollars",
         "description": "the measurement of physical investment used in GDP",
-        "change_type": "absolute"  # Use absolute change (subtract)
+        "change_type": "absolute"
     },
     "consumption": {
         "data_key": "consumption", 
@@ -113,7 +107,7 @@ INDICATORS = {
         "column": "PCE",
         "unit": "billion dollars",
         "description": "a measure of consumer spending on goods and services",
-        "change_type": "absolute"  # Use absolute change (subtract)
+        "change_type": "absolute"
     },
     "personal consumption": {
         "data_key": "consumption", 
@@ -121,7 +115,7 @@ INDICATORS = {
         "column": "PCE",
         "unit": "billion dollars",
         "description": "a measure of consumer spending on goods and services",
-        "change_type": "absolute"  # Use absolute change (subtract)
+        "change_type": "absolute"
     },
     "cpi": {
         "data_key": "cpi", 
@@ -129,7 +123,7 @@ INDICATORS = {
         "column": "CPALTT01USQ657N",
         "unit": "%",
         "description": "a measure of the average change over time in the prices paid by consumers for a basket of goods and services",
-        "change_type": "percentage"  # Use percentage change
+        "change_type": "percentage"
     },
     "inflation": {
         "data_key": "cpi", 
@@ -137,7 +131,7 @@ INDICATORS = {
         "column": "CPALTT01USQ657N",
         "unit": "%",
         "description": "a measure of the average change over time in the prices paid by consumers for a basket of goods and services",
-        "change_type": "percentage"  # Use percentage change
+        "change_type": "percentage"
     },
     "consumer price index": {
         "data_key": "cpi", 
@@ -145,16 +139,15 @@ INDICATORS = {
         "column": "CPALTT01USQ657N",
         "unit": "%",
         "description": "a measure of the average change over time in the prices paid by consumers for a basket of goods and services",
-        "change_type": "percentage"  # Use percentage change
+        "change_type": "percentage"
     }
 }
 
-# Load data at startup
 ECONOMIC_DATA = load_csv_files()
 
 def is_silent(snd_data, threshold=SILENCE_THRESHOLD):
     """Returns True if the sound data is below the silence threshold"""
-    # Calculate RMS (root mean square)
+    # RMS to determine silence. Could use other method, but I think this is accurate enough and way simpler
     rms = audioop.rms(snd_data, 2)
     return rms < threshold
 
@@ -182,35 +175,32 @@ def record_audio_with_silence_detection():
     
     frames = []
     silent_frames = 0
-    max_frames = int(RATE / CHUNK * MAX_RECORD_SECONDS)  # Maximum number of frames to record
+    max_frames = int(RATE / CHUNK * MAX_RECORD_SECONDS)
     
-    # Wait until speech starts
+    # wait to process until you hear speech, don't want to repeatedly process silence for no reason
     silent_count = 0
     while True:
         data = stream.read(CHUNK)
         if not is_silent(data):
             break
         silent_count += 1
-        # If silence for too long, prompt user
-        if silent_count > int(RATE / CHUNK * 5):  # 5 seconds of initial silence
+        # If silence for too long, prompt user with something to make sure they're not afk
+        if silent_count > int(RATE / CHUNK * 5):
             print("Waiting for speech...")
             silent_count = 0
     
     print("Speech detected, recording...")
     
-    # Continue recording until silence is detected for SILENCE_DURATION seconds
+    # silence for 1.5 seconds after speech means we process, because the user is prob done speaking
     for i in range(max_frames):
         data = stream.read(CHUNK)
         frames.append(data)
         
-        # If silent frame, increment counter
         if is_silent(data):
             silent_frames += 1
-            # If enough silent frames, stop recording
             if silent_frames >= int(SILENCE_DURATION * RATE / CHUNK):
                 break
         else:
-            # Reset silent counter if sound detected
             silent_frames = 0
             
     print("Recording finished.")
@@ -219,7 +209,7 @@ def record_audio_with_silence_detection():
     stream.close()
     p.terminate()
     
-    # Save to a temporary file
+
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
         temp_filename = temp_audio.name
         
@@ -237,12 +227,11 @@ def listen_for_command():
     try:
         temp_filename = record_audio_with_silence_detection()
         
-        # Transcribe with Whisper
+        # turn into text
         print("Transcribing with Whisper...")
         result = whisper_model.transcribe(temp_filename)
         command = result["text"].lower().strip()
-        
-        # Clean up temporary file
+
         os.unlink(temp_filename)
         
         print(f"Command recognized: {command}")
@@ -261,16 +250,13 @@ def speak(text):
 def extract_indicators(command):
     """Extract economic indicators mentioned in the command"""
     indicators = []
-    matched_data_keys = set()  # Track data_keys that have already been matched
+    matched_data_keys = set()
     
-    # Sort keys by length (descending) to match longer keys first
-    # This ensures "unemployment rate" is matched before "unemployment"
     sorted_keys = sorted(INDICATORS.keys(), key=len, reverse=True)
     
     for indicator in sorted_keys:
         if indicator in command:
             data_key = INDICATORS[indicator]["data_key"]
-            # Only add this indicator if we haven't already matched one with the same data_key
             if data_key not in matched_data_keys:
                 indicators.append(indicator)
                 matched_data_keys.add(data_key)
@@ -283,9 +269,8 @@ def extract_timeframe(command):
     years = 1
     months = 0
     
-    # Check for "all" or "entire" dataset
     if "all" in command or "entire" in command or "last 10 years" in command:
-        return 10, 0  # Return the entire dataset (approximately 10 years)
+        return 10, 0
     
     # Check for years
     year_match = re.search(r'(\d+)\s+year', command)
@@ -297,16 +282,15 @@ def extract_timeframe(command):
     if month_match:
         months = int(month_match.group(1))
     
-    # Check for "last year", "last month"
+    # Check for "last"
     if "last year" in command and not year_match:
         years = 1
     if "last month" in command and not month_match:
-        months = 3  # Use last quarter since data is quarterly
+        months = 3  # quarterly data so 3 months instead of 1
         years = 0
     
-    # Force a minimum reasonable timeframe
     if years == 0 and months == 0:
-        years = 1  # Default to 1 year
+        years = 1  # can't get data for less than a certain timeframe
         
     return years, months
 
@@ -321,23 +305,18 @@ def get_data_for_indicator(indicator, years, months):
         data_key = indicator_info["data_key"]
         column = indicator_info["column"]
         
-        # Get data from the loaded CSV
         df = ECONOMIC_DATA[data_key]
         
-        # Sort by date to ensure proper order
         df = df.sort_index()
-        
-        # If we want all data, return all
+
         if years >= 10:
             return df[column]
         
-        # Calculate the date range
         now = datetime.now()
         quarters = years * 4 + (months // 3)
         if quarters < 1:
             quarters = 1
             
-        # Take the last N quarters of data
         data = df[column].iloc[-quarters:]
         
         return data
@@ -345,6 +324,7 @@ def get_data_for_indicator(indicator, years, months):
         print(f"Error retrieving data for {indicator}: {e}")
         return None
 
+# plot graph of economic data for user's request so they can see, for non-blind people
 def plot_data(data, title, y_label=None):
     """Plot data and save to file"""
     plt.figure(figsize=(10, 6))
@@ -355,7 +335,6 @@ def plot_data(data, title, y_label=None):
     plt.grid(True)
     plt.tight_layout()
     
-    # Save file
     filename = f"{title.lower().replace(' ', '_')}.png"
     plt.savefig(filename)
     plt.close()
@@ -370,20 +349,18 @@ def get_current_summary():
     summary = "Here's a summary of current economic conditions: "
     
     try:
-        # Get latest values
         unemployment = ECONOMIC_DATA["unemployment"]["LRUN64TTUSQ156S"].iloc[-1]
         rgdp = ECONOMIC_DATA["rgdp"]["GDPC1"].iloc[-1]
         
-        # Get inflation data (CPI)
+        # CPI
         cpi_quarterly = ECONOMIC_DATA["cpi"]["CPALTT01USQ657N"]
         
-        # Calculate annual inflation rate by summing the last 4 quarters of CPI data
+        # annual inflation from 4 quarters of CPI
         annual_inflation = cpi_quarterly.iloc[-4:].sum()
         
-        # Calculate recent GDP growth (last quarter)
+        # RGDP growth quarterly
         gdp_growth_dollars = ECONOMIC_DATA["rgdp"]["GDPC1"].iloc[-1] - ECONOMIC_DATA["rgdp"]["GDPC1"].iloc[-2]
         
-        # Add to summary
         summary += f"The current unemployment rate is {unemployment:.1f}%. "
         summary += f"Annual inflation is running at {annual_inflation:.1f}%. "
         summary += f"Real GDP is at {rgdp:.1f} billion dollars, "
@@ -396,7 +373,6 @@ def get_current_summary():
 
 def compare_to_historical(indicator, data, timeframe_text):
     """Generate comparison to historical highs, lows, and averages"""
-    # Get full dataset
     indicator_info = INDICATORS[indicator]
     data_key = indicator_info["data_key"]
     column = indicator_info["column"]
@@ -409,7 +385,7 @@ def compare_to_historical(indicator, data, timeframe_text):
     
     percentile = (full_data < current).mean() * 100
     
-    # Get 2019 pre-pandemic average for comparison
+    # pre-pandemic avgs for comparison
     pre_pandemic = full_data['2019'].mean()
     
     # Handle different types of changes
@@ -419,7 +395,7 @@ def compare_to_historical(indicator, data, timeframe_text):
     elif indicator_info["change_type"] == "absolute":
         vs_pre_pandemic = current - pre_pandemic
         vs_pre_text = f"{abs(vs_pre_pandemic):.1f} {indicator_info['unit']}"
-    else:  # percentage
+    else:
         vs_pre_pandemic = ((current / pre_pandemic) - 1) * 100
         vs_pre_text = f"{abs(vs_pre_pandemic):.1f}%"
     
@@ -435,13 +411,13 @@ def compare_to_historical(indicator, data, timeframe_text):
     comparison += f"compared to the last 10 years. "
     comparison += f"The historical average is {historical_avg:.2f} {indicator_info['unit']}. "
     
-    # Report the change compared to pre-pandemic
+    # change compared to pre-pandemic
     if indicator_info["change_type"] == "percentage_point" or indicator_info["change_type"] == "absolute":
         if vs_pre_pandemic > 0:
             comparison += f"It is {vs_pre_text} higher than before the pandemic. "
         else:
             comparison += f"It is {vs_pre_text} lower than before the pandemic. "
-    else:  # percentage
+    else:
         if vs_pre_pandemic > 0:
             comparison += f"It is {vs_pre_text} higher than before the pandemic. "
         else:
@@ -453,9 +429,8 @@ def format_change(indicator, latest_value, earliest_value):
     """Format change between values according to indicator type"""
     indicator_info = INDICATORS[indicator]
     
-    # Handle different types of changes
     if indicator_info["change_type"] == "percentage_point":
-        # For percentage point indicators like unemployment rate
+        # percentage point indicators
         change_value = latest_value - earliest_value
         if change_value >= 0:
             return f"It has increased by {change_value:.1f} percentage points"
@@ -463,15 +438,14 @@ def format_change(indicator, latest_value, earliest_value):
             return f"It has decreased by {abs(change_value):.1f} percentage points"
     
     elif indicator_info["change_type"] == "absolute":
-        # For absolute value indicators like GDP
+        # absolute indicators
         change_value = latest_value - earliest_value
         if change_value >= 0:
             return f"It has increased by {change_value:.1f} {indicator_info['unit']}"
         else:
             return f"It has decreased by {abs(change_value):.1f} {indicator_info['unit']}"
     
-    else:  # "percentage" - default percentage change
-        # For percentage change indicators like industrial production
+    else: 
         pct_change = ((latest_value - earliest_value) / earliest_value) * 100 if earliest_value != 0 else 0
         if pct_change >= 0:
             return f"It has increased by {pct_change:.1f}%"
@@ -481,9 +455,8 @@ def format_change(indicator, latest_value, earliest_value):
 def calculate_annual_inflation(data, periods=4):
     """Calculate annual inflation rate from quarterly CPI data"""
     if len(data) < periods:
-        return data.sum()  # If we have less than a year's data, return what we have
+        return data.sum()
     
-    # Sum the most recent periods (quarters) to get annual rate
     return data.iloc[-periods:].sum()
 
 def process_command(command):
@@ -491,12 +464,12 @@ def process_command(command):
     if not command:
         return True
     
-    # Check for exit command
+    # exit command
     if "exit" in command or "quit" in command:
         speak("Goodbye!")
         return False
     
-    # Check for help command
+    # functionality to help user if needed
     if "help" in command or "what can you do" in command:
         help_text = "I can provide economic data on unemployment, GDP, industrial production, investment, and consumption. "
         help_text += "You can ask questions like: 'What is the current unemployment rate?', "
@@ -505,13 +478,13 @@ def process_command(command):
         speak(help_text)
         return True
     
-    # Extract indicators
+    # if we can't find any indicators, tell user
     indicators = extract_indicators(command)
     if not indicators:
         speak("I couldn't identify any economic indicators in your request. Please mention specific indicators like unemployment rate, GDP, industrial production, investment, or consumption.")
         return True
     
-    # Extract timeframe
+    # timeframe
     years, months = extract_timeframe(command)
     timeframe_text = f"{years} year{'s' if years != 1 else ''}" if years > 0 else ""
     if months > 0:
@@ -528,46 +501,37 @@ def process_command(command):
         data = get_data_for_indicator(indicator, years, months)
         
         if data is not None and not data.empty:
-            # Plot data
             title = f"{indicator_name} - Past {timeframe_text}"
             y_label = f"{indicator_name} ({indicator_info['unit']})"
             filename = plot_data(data, title, y_label)
-            
-            # Get latest value and earliest value in the requested timeframe
+
             latest_value = data.iloc[-1]
             earliest_value = data.iloc[0]
             
-            # Special handling for CPI (inflation) data
             if indicator in ["cpi", "inflation", "consumer price index"]:
                 # For CPI, calculate annualized rates
-                if len(data) >= 8:  # At least 2 years of quarterly data
-                    # Calculate the annual inflation rate for the most recent year
+                if len(data) >= 8: 
                     annual_inflation_current = calculate_annual_inflation(data.iloc[-4:])
                     
                     if years > 1:
-                        # Calculate the annual inflation rate for the earliest year in the timeframe
                         annual_inflation_start = calculate_annual_inflation(data.iloc[:4])
                         change_text = format_change(indicator, annual_inflation_current, annual_inflation_start)
                         response = f"The current annual inflation rate is {annual_inflation_current:.1f}%. "
                         response += f"{change_text} compared to {years} years ago. "
                     else:
-                        # Compare current annual rate to the previous year
                         annual_inflation_previous = calculate_annual_inflation(data.iloc[-8:-4])
                         change_text = format_change(indicator, annual_inflation_current, annual_inflation_previous)
                         response = f"The current annual inflation rate is {annual_inflation_current:.1f}%. "
                         response += f"{change_text} compared to the previous year. "
                 else:
-                    # Use regular format_change for shorter timeframes
                     change_text = format_change(indicator, latest_value, earliest_value)
                     response = f"The current quarterly inflation rate is {latest_value:.2f}%. "
                     response += f"{change_text} over the past {timeframe_text}. "
             else:
-                # Normal handling for other indicators - always compare first and last values of the requested timeframe
                 change_text = format_change(indicator, latest_value, earliest_value)
                 response = f"The current {indicator_name} is {latest_value:.2f} {indicator_info['unit']}. "
                 response += f"{change_text} over the past {timeframe_text}. "
             
-            # Add historical comparison if requested
             if "compare" in command or "historical" in command or "history" in command or "past" in command:
                 response += compare_to_historical(indicator, data, timeframe_text)
                 
@@ -584,7 +548,7 @@ def main():
         speak("Warning: I couldn't load the economic data files. Please check that the CSV files are in the current directory.")
         return
     
-    # Provide a summary of current economic conditions on startup
+    # startup summary of current economic conditions
     summary = get_current_summary()
     speak("Blind Trading Assistant activated. " + summary + " How can I help you today?")
     
