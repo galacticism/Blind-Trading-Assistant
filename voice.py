@@ -13,6 +13,8 @@ from datetime import datetime
 from dotenv import load_dotenv
 import nltk
 from nltk.tokenize import word_tokenize
+import audioop
+from array import array
 
 # Load environment variables (not needed now but kept for future)
 load_dotenv()
@@ -33,7 +35,9 @@ CHUNK = 1024
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
 RATE = 16000
-RECORD_SECONDS = 5  # Default recording time
+SILENCE_THRESHOLD = 300  # Adjust this value as needed
+SILENCE_DURATION = 1.5  # Number of seconds of silence to determine end of speech
+MAX_RECORD_SECONDS = 30  # Maximum recording time to prevent infinite recording
 
 # Load CSV files
 def load_csv_files():
@@ -148,8 +152,24 @@ INDICATORS = {
 # Load data at startup
 ECONOMIC_DATA = load_csv_files()
 
-def record_audio(seconds=RECORD_SECONDS):
-    """Record audio from microphone and save to a temporary file"""
+def is_silent(snd_data, threshold=SILENCE_THRESHOLD):
+    """Returns True if the sound data is below the silence threshold"""
+    # Calculate RMS (root mean square)
+    rms = audioop.rms(snd_data, 2)
+    return rms < threshold
+
+def normalize(snd_data):
+    """Average the volume out"""
+    MAXIMUM = 16384
+    times = float(MAXIMUM) / max(abs(i) for i in snd_data)
+    
+    r = array('h')
+    for i in snd_data:
+        r.append(int(i * times))
+    return r
+
+def record_audio_with_silence_detection():
+    """Record audio from microphone until silence is detected"""
     p = pyaudio.PyAudio()
     
     stream = p.open(format=FORMAT,
@@ -158,14 +178,41 @@ def record_audio(seconds=RECORD_SECONDS):
                     input=True,
                     frames_per_buffer=CHUNK)
     
-    print("Recording...")
+    print("Listening... (speak when ready, I'll process when you stop talking)")
     
     frames = []
+    silent_frames = 0
+    max_frames = int(RATE / CHUNK * MAX_RECORD_SECONDS)  # Maximum number of frames to record
     
-    for i in range(0, int(RATE / CHUNK * seconds)):
+    # Wait until speech starts
+    silent_count = 0
+    while True:
+        data = stream.read(CHUNK)
+        if not is_silent(data):
+            break
+        silent_count += 1
+        # If silence for too long, prompt user
+        if silent_count > int(RATE / CHUNK * 5):  # 5 seconds of initial silence
+            print("Waiting for speech...")
+            silent_count = 0
+    
+    print("Speech detected, recording...")
+    
+    # Continue recording until silence is detected for SILENCE_DURATION seconds
+    for i in range(max_frames):
         data = stream.read(CHUNK)
         frames.append(data)
-    
+        
+        # If silent frame, increment counter
+        if is_silent(data):
+            silent_frames += 1
+            # If enough silent frames, stop recording
+            if silent_frames >= int(SILENCE_DURATION * RATE / CHUNK):
+                break
+        else:
+            # Reset silent counter if sound detected
+            silent_frames = 0
+            
     print("Recording finished.")
     
     stream.stop_stream()
@@ -188,7 +235,7 @@ def record_audio(seconds=RECORD_SECONDS):
 def listen_for_command():
     """Listen for voice command using microphone and transcribe with Whisper"""
     try:
-        temp_filename = record_audio()
+        temp_filename = record_audio_with_silence_detection()
         
         # Transcribe with Whisper
         print("Transcribing with Whisper...")
@@ -214,10 +261,19 @@ def speak(text):
 def extract_indicators(command):
     """Extract economic indicators mentioned in the command"""
     indicators = []
+    matched_data_keys = set()  # Track data_keys that have already been matched
     
-    for indicator in INDICATORS.keys():
+    # Sort keys by length (descending) to match longer keys first
+    # This ensures "unemployment rate" is matched before "unemployment"
+    sorted_keys = sorted(INDICATORS.keys(), key=len, reverse=True)
+    
+    for indicator in sorted_keys:
         if indicator in command:
-            indicators.append(indicator)
+            data_key = INDICATORS[indicator]["data_key"]
+            # Only add this indicator if we haven't already matched one with the same data_key
+            if data_key not in matched_data_keys:
+                indicators.append(indicator)
+                matched_data_keys.add(data_key)
     
     return indicators
 
