@@ -1,8 +1,10 @@
 openai-whisper==20231117
 pyaudio==0.2.13
+fredapi==0.5.1
 nltk==3.8.1
 pyttsx3==2.90
 pandas==2.0.3
 matplotlib==3.7.2
 requests==2.31.0
-python-dotenv==1.0.0 
+python-dotenv==1.0.0
+yfinance==0.2.35 

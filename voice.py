@@ -9,19 +9,24 @@ import numpy as np
 import pyttsx3
 import pandas as pd
 import matplotlib.pyplot as plt
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import nltk
 from nltk.tokenize import word_tokenize
 import audioop
 from array import array
+import yfinance as yf
+import threading
+import queue
+from functools import lru_cache
 
 load_dotenv()
 
 nltk.download('punkt', quiet=True)
 
+# Use 'tiny' model instead of 'base' for faster processing
 print("Loading Whisper model (this might take a moment)...")
-whisper_model = whisper.load_model("base")
+whisper_model = whisper.load_model("tiny")
 print("Whisper model loaded!")
 
 engine = pyttsx3.init()
@@ -34,6 +39,10 @@ SILENCE_THRESHOLD = 300
 SILENCE_DURATION = 1.5
 MAX_RECORD_SECONDS = 30
 
+# Queue for background processing tasks
+task_queue = queue.Queue()
+
+# Preload and cache CSV data
 def load_csv_files():
     """Load all economic indicator CSV files"""
     data = {}
@@ -44,6 +53,10 @@ def load_csv_files():
         data["investment"] = pd.read_csv("GPDI.csv", parse_dates=["observation_date"], index_col="observation_date")
         data["consumption"] = pd.read_csv("Personal Consumption Expenditures.csv", parse_dates=["observation_date"], index_col="observation_date")
         data["cpi"] = pd.read_csv("CPI.csv", parse_dates=["observation_date"], index_col="observation_date")
+        
+        # Sort data once at load time
+        for key in data:
+            data[key] = data[key].sort_index()
         
         print("CSV files loaded successfully")
         return data
@@ -143,6 +156,59 @@ INDICATORS = {
     }
 }
 
+# Stock ticker mappings - common company names to ticker symbols
+STOCK_TICKERS = {
+    "apple": "AAPL",
+    "microsoft": "MSFT",
+    "amazon": "AMZN",
+    "google": "GOOGL",
+    "alphabet": "GOOGL",
+    "meta": "META",
+    "facebook": "META",
+    "tesla": "TSLA",
+    "nvidia": "NVDA",
+    "netflix": "NFLX",
+    "disney": "DIS",
+    "walmart": "WMT",
+    "coca cola": "KO",
+    "coke": "KO",
+    "pepsi": "PEP",
+    "pepsico": "PEP",
+    "mcdonalds": "MCD",
+    "starbucks": "SBUX",
+    "nike": "NKE",
+    "ibm": "IBM",
+    "intel": "INTC",
+    "ford": "F",
+    "general motors": "GM",
+    "exxon": "XOM",
+    "exxon mobil": "XOM",
+    "chevron": "CVX",
+    "goldman sachs": "GS",
+    "jpmorgan": "JPM",
+    "jp morgan": "JPM",
+    "bank of america": "BAC",
+    "visa": "V",
+    "mastercard": "MA",
+    "verizon": "VZ",
+    "att": "T",
+    "at&t": "T",
+    "costco": "COST",
+    "home depot": "HD",
+    "target": "TGT",
+    "sp500": "^GSPC",
+    "s&p 500": "^GSPC",
+    "s&p": "^GSPC",
+    "dow": "^DJI",
+    "dow jones": "^DJI",
+    "nasdaq": "^IXIC",
+    "bitcoin": "BTC-USD",
+    "ethereum": "ETH-USD"
+}
+
+# Cache of stock data to avoid repeated API calls
+STOCK_CACHE = {}
+
 ECONOMIC_DATA = load_csv_files()
 
 def is_silent(snd_data, threshold=SILENCE_THRESHOLD):
@@ -227,11 +293,16 @@ def listen_for_command():
     try:
         temp_filename = record_audio_with_silence_detection()
         
+        # Quick acknowledgment to let user know system is working
+        speak("Processing...", wait=False)
+        
         # turn into text
         print("Transcribing with Whisper...")
+        start_time = time.time()
         result = whisper_model.transcribe(temp_filename)
         command = result["text"].lower().strip()
-
+        print(f"Transcription completed in {time.time() - start_time:.2f} seconds")
+        
         os.unlink(temp_filename)
         
         print(f"Command recognized: {command}")
@@ -241,11 +312,16 @@ def listen_for_command():
         speak("Sorry, I encountered an error while trying to understand your command.")
         return None
 
-def speak(text):
+def speak(text, wait=True):
     """Convert text to speech"""
     print(f"Assistant: {text}")
     engine.say(text)
-    engine.runAndWait()
+    if wait:
+        engine.runAndWait()
+    else:
+        # Start a thread to handle the speech in the background
+        # and return immediately to the user
+        threading.Thread(target=engine.runAndWait).start()
 
 def extract_indicators(command):
     """Extract economic indicators mentioned in the command"""
@@ -262,6 +338,22 @@ def extract_indicators(command):
                 matched_data_keys.add(data_key)
     
     return indicators
+
+def extract_ticker(command):
+    """Extract stock ticker from command"""
+    # First check if the command contains any company names from our mapping
+    command_lower = command.lower()
+    for company, ticker in STOCK_TICKERS.items():
+        if company in command_lower:
+            return ticker, company
+    
+    # If not found, check for explicit ticker mentions (uppercase 1-5 letter sequences)
+    ticker_match = re.search(r'\b([A-Z]{1,5})\b', command)
+    if ticker_match:
+        ticker = ticker_match.group(1)
+        return ticker, ticker
+    
+    return None, None
 
 def extract_timeframe(command):
     """Extract timeframe from command"""
@@ -307,8 +399,6 @@ def get_data_for_indicator(indicator, years, months):
         
         df = ECONOMIC_DATA[data_key]
         
-        df = df.sort_index()
-
         if years >= 10:
             return df[column]
         
@@ -459,6 +549,119 @@ def calculate_annual_inflation(data, periods=4):
     
     return data.iloc[-periods:].sum()
 
+@lru_cache(maxsize=32)
+def get_stock_data(ticker):
+    """Get stock data for a specific ticker with caching"""
+    # Check cache first (for current session)
+    if ticker in STOCK_CACHE:
+        # Only use cached data if it's less than 10 minutes old
+        cache_time, data = STOCK_CACHE[ticker]
+        if datetime.now() - cache_time < timedelta(minutes=10):
+            return data, None
+    
+    try:
+        # Get stock info
+        start_time = time.time()
+        ticker_obj = yf.Ticker(ticker)
+        info = ticker_obj.info
+        
+        # Get historical data for the last 30 days
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=30)
+        hist = ticker_obj.history(start=start_date, end=end_date)
+        print(f"Stock data retrieved in {time.time() - start_time:.2f} seconds")
+        
+        if hist.empty:
+            return None, "No data available for this ticker."
+        
+        # Calculate performance metrics
+        current_price = hist['Close'].iloc[-1]
+        prev_close = hist['Close'].iloc[-2] if len(hist) > 1 else current_price
+        day_change = ((current_price / prev_close) - 1) * 100
+        
+        month_start = hist['Close'].iloc[0]
+        month_change = ((current_price / month_start) - 1) * 100
+        
+        # Get company name and sector
+        company_name = info.get('longName', ticker)
+        sector = info.get('sector', 'N/A')
+        
+        # Create a summary
+        summary = {
+            'ticker': ticker,
+            'company_name': company_name,
+            'sector': sector,
+            'current_price': current_price,
+            'day_change': day_change,
+            'month_change': month_change,
+            'history': hist
+        }
+        
+        # Cache the result
+        STOCK_CACHE[ticker] = (datetime.now(), summary)
+        
+        return summary, None
+    except Exception as e:
+        print(f"Error retrieving stock data: {e}")
+        return None, f"Error retrieving stock data: {e}"
+
+def plot_stock_data(data, ticker):
+    """Plot stock price history"""
+    hist = data['history']
+    
+    plt.figure(figsize=(10, 6))
+    plt.plot(hist.index, hist['Close'])
+    plt.title(f"{data['company_name']} ({ticker}) - Last 30 Days")
+    plt.ylabel("Price ($)")
+    plt.grid(True)
+    plt.tight_layout()
+    
+    filename = f"{ticker.lower()}_stock_price.png"
+    plt.savefig(filename)
+    plt.close()
+    
+    return filename
+
+def generate_stock_response(data):
+    """Generate a spoken response about stock performance"""
+    ticker = data['ticker']
+    company_name = data['company_name']
+    current_price = data['current_price']
+    day_change = data['day_change']
+    month_change = data['month_change']
+    sector = data['sector']
+    
+    response = f"{company_name} with ticker symbol {ticker} "
+    
+    if sector != 'N/A':
+        response += f"in the {sector} sector "
+    
+    response += f"is currently trading at ${current_price:.2f}. "
+    
+    # Add day change
+    if day_change > 0:
+        response += f"It's up {abs(day_change):.1f}% today. "
+    elif day_change < 0:
+        response += f"It's down {abs(day_change):.1f}% today. "
+    else:
+        response += f"Its price is unchanged today. "
+    
+    # Add month change
+    if month_change > 0:
+        response += f"Over the past month, it has gained {abs(month_change):.1f}%. "
+    elif month_change < 0:
+        response += f"Over the past month, it has lost {abs(month_change):.1f}%. "
+    else:
+        response += f"Over the past month, its price has remained stable. "
+    
+    return response
+
+def background_plot_task(func, *args, **kwargs):
+    """Run plotting tasks in background to avoid blocking"""
+    result = func(*args, **kwargs)
+    task_queue.put(result)
+    return result
+
 def process_command(command):
     """Process voice command and respond with economic data"""
     if not command:
@@ -475,14 +678,65 @@ def process_command(command):
         help_text += "You can ask questions like: 'What is the current unemployment rate?', "
         help_text += "'How has GDP changed over the last 5 years?', or "
         help_text += "'Compare industrial production to historical data'. "
+        help_text += "I can also give you stock information. Just ask about a company like 'How is Apple doing?' or 'Tell me about Tesla stock.'"
         speak(help_text)
         return True
+    
+    # Check for stock ticker request
+    if "stock" in command or "price" in command or "ticker" in command or "trading" in command or \
+       "how is" in command or "tell me about" in command or "what about" in command:
+        
+        ticker, company_name = extract_ticker(command)
+        
+        if ticker:
+            speak(f"Looking up stock information for {company_name}...", wait=False)
+            
+            # Use threading to fetch stock data in background
+            def stock_processing():
+                stock_data, error = get_stock_data(ticker)
+                
+                if error:
+                    speak(f"Sorry, I couldn't retrieve stock data for {company_name}. {error}")
+                    return
+                
+                # Generate the plot in background thread
+                filename = plot_stock_data(stock_data, ticker)
+                
+                # Construct and speak the response
+                response = generate_stock_response(stock_data)
+                response += f"I've saved a chart of the stock's performance as {filename}."
+                speak(response)
+            
+            # Start processing in background thread and return immediately
+            threading.Thread(target=stock_processing).start()
+            return True
     
     # if we can't find any indicators, tell user
     indicators = extract_indicators(command)
     if not indicators:
-        speak("I couldn't identify any economic indicators in your request. Please mention specific indicators like unemployment rate, GDP, industrial production, investment, or consumption.")
-        return True
+        # Check if it might be a stock request without standard keywords
+        ticker, company_name = extract_ticker(command)
+        if ticker:
+            speak(f"I'll interpret that as a request for stock information about {company_name}...", wait=False)
+            
+            # Use threading for background processing
+            def process_stock_request():
+                stock_data, error = get_stock_data(ticker)
+                
+                if error:
+                    speak(f"Sorry, I couldn't retrieve stock data for {company_name}. {error}")
+                    return
+                
+                filename = plot_stock_data(stock_data, ticker)
+                response = generate_stock_response(stock_data)
+                response += f"I've saved a chart of the stock's performance as {filename}."
+                speak(response)
+            
+            threading.Thread(target=process_stock_request).start()
+            return True
+        else:
+            speak("I couldn't identify any economic indicators or stock tickers in your request. Please mention specific indicators like unemployment rate, GDP, or company names like Apple or Microsoft.")
+            return True
     
     # timeframe
     years, months = extract_timeframe(command)
@@ -497,49 +751,54 @@ def process_command(command):
         indicator_info = INDICATORS[indicator]
         indicator_name = indicator_info["name"]
         
-        speak(f"Retrieving {indicator_name} data for the past {timeframe_text}...")
-        data = get_data_for_indicator(indicator, years, months)
+        speak(f"Processing {indicator_name} data...", wait=False)
         
-        if data is not None and not data.empty:
-            title = f"{indicator_name} - Past {timeframe_text}"
-            y_label = f"{indicator_name} ({indicator_info['unit']})"
-            filename = plot_data(data, title, y_label)
-
-            latest_value = data.iloc[-1]
-            earliest_value = data.iloc[0]
+        # Define processing function for background thread
+        def process_indicator_data():
+            data = get_data_for_indicator(indicator, years, months)
             
-            if indicator in ["cpi", "inflation", "consumer price index"]:
-                # For CPI, calculate annualized rates
-                if len(data) >= 8: 
-                    annual_inflation_current = calculate_annual_inflation(data.iloc[-4:])
-                    
-                    if years > 1:
-                        annual_inflation_start = calculate_annual_inflation(data.iloc[:4])
-                        change_text = format_change(indicator, annual_inflation_current, annual_inflation_start)
-                        response = f"The current annual inflation rate is {annual_inflation_current:.1f}%. "
-                        response += f"{change_text} compared to {years} years ago. "
+            if data is not None and not data.empty:
+                title = f"{indicator_name} - Past {timeframe_text}"
+                y_label = f"{indicator_name} ({indicator_info['unit']})"
+                filename = plot_data(data, title, y_label)
+                
+                latest_value = data.iloc[-1]
+                earliest_value = data.iloc[0]
+                
+                if indicator in ["cpi", "inflation", "consumer price index"]:
+                    if len(data) >= 8: 
+                        annual_inflation_current = calculate_annual_inflation(data.iloc[-4:])
+                        
+                        if years > 1:
+                            annual_inflation_start = calculate_annual_inflation(data.iloc[:4])
+                            change_text = format_change(indicator, annual_inflation_current, annual_inflation_start)
+                            response = f"The current annual inflation rate is {annual_inflation_current:.1f}%. "
+                            response += f"{change_text} compared to {years} years ago. "
+                        else:
+                            annual_inflation_previous = calculate_annual_inflation(data.iloc[-8:-4])
+                            change_text = format_change(indicator, annual_inflation_current, annual_inflation_previous)
+                            response = f"The current annual inflation rate is {annual_inflation_current:.1f}%. "
+                            response += f"{change_text} compared to the previous year. "
                     else:
-                        annual_inflation_previous = calculate_annual_inflation(data.iloc[-8:-4])
-                        change_text = format_change(indicator, annual_inflation_current, annual_inflation_previous)
-                        response = f"The current annual inflation rate is {annual_inflation_current:.1f}%. "
-                        response += f"{change_text} compared to the previous year. "
+                        change_text = format_change(indicator, latest_value, earliest_value)
+                        response = f"The current quarterly inflation rate is {latest_value:.2f}%. "
+                        response += f"{change_text} over the past {timeframe_text}. "
                 else:
                     change_text = format_change(indicator, latest_value, earliest_value)
-                    response = f"The current quarterly inflation rate is {latest_value:.2f}%. "
+                    response = f"The current {indicator_name} is {latest_value:.2f} {indicator_info['unit']}. "
                     response += f"{change_text} over the past {timeframe_text}. "
-            else:
-                change_text = format_change(indicator, latest_value, earliest_value)
-                response = f"The current {indicator_name} is {latest_value:.2f} {indicator_info['unit']}. "
-                response += f"{change_text} over the past {timeframe_text}. "
-            
-            if "compare" in command or "historical" in command or "history" in command or "past" in command:
-                response += compare_to_historical(indicator, data, timeframe_text)
                 
-            response += f"{indicator_info['description'].capitalize()}. "
-            response += f"I've saved a chart as {filename}."
-            speak(response)
-        else:
-            speak(f"Sorry, I couldn't retrieve data for {indicator_name}.")
+                if "compare" in command or "historical" in command or "history" in command or "past" in command:
+                    response += compare_to_historical(indicator, data, timeframe_text)
+                    
+                response += f"{indicator_info['description'].capitalize()}. "
+                response += f"I've saved a chart as {filename}."
+                speak(response)
+            else:
+                speak(f"Sorry, I couldn't retrieve data for {indicator_name}.")
+        
+        # Process in background thread
+        threading.Thread(target=process_indicator_data).start()
     
     return True
 
