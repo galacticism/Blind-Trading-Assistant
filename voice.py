@@ -9,25 +9,16 @@ import numpy as np
 import pyttsx3
 import pandas as pd
 import matplotlib.pyplot as plt
-from fredapi import Fred
+from datetime import datetime
 from dotenv import load_dotenv
 import nltk
 from nltk.tokenize import word_tokenize
-from nltk.corpus import stopwords
 
-# Load environment variables
+# Load environment variables (not needed now but kept for future)
 load_dotenv()
 
 # Download NLTK resources
 nltk.download('punkt', quiet=True)
-nltk.download('stopwords', quiet=True)
-
-# Initialize FRED API
-FRED_API_KEY = os.getenv('FRED_API_KEY')
-if not FRED_API_KEY:
-    print("Warning: FRED_API_KEY not found in .env file. Please add it.")
-    FRED_API_KEY = "your_api_key_here"  # Placeholder for testing
-fred = Fred(api_key=FRED_API_KEY)
 
 # Initialize Whisper model for speech recognition
 print("Loading Whisper model (this might take a moment)...")
@@ -44,23 +35,93 @@ CHANNELS = 1
 RATE = 16000
 RECORD_SECONDS = 5  # Default recording time
 
-# Economic indicators and their FRED series IDs
+# Load CSV files
+def load_csv_files():
+    """Load all economic indicator CSV files"""
+    data = {}
+    try:
+        data["unemployment"] = pd.read_csv("Unemployment.csv", parse_dates=["observation_date"], index_col="observation_date")
+        data["rgdp"] = pd.read_csv("RGDP.csv", parse_dates=["observation_date"], index_col="observation_date")
+        data["industrial_production"] = pd.read_csv("Industrial Production.csv", parse_dates=["observation_date"], index_col="observation_date")
+        data["investment"] = pd.read_csv("GPDI.csv", parse_dates=["observation_date"], index_col="observation_date")
+        data["consumption"] = pd.read_csv("Personal Consumption Expenditures.csv", parse_dates=["observation_date"], index_col="observation_date")
+        
+        print("CSV files loaded successfully")
+        return data
+    except Exception as e:
+        print(f"Error loading CSV files: {e}")
+        return None
+
+# Economic indicators and their corresponding CSV file keys and display names
 INDICATORS = {
-    "unemployment rate": "UNRATE",
-    "inflation": "CPIAUCSL",
-    "gdp": "GDP",
-    "federal funds rate": "FEDFUNDS",
-    "consumer sentiment": "UMCSENT",
-    "retail sales": "RSAFS",
-    "housing starts": "HOUST",
-    "industrial production": "INDPRO",
-    "s&p 500": "SP500",
-    "10-year treasury": "DGS10",
-    "yield curve": {"10-year": "DGS10", "2-year": "DGS2"},
-    "consumer price index": "CPIAUCSL",
-    "personal income": "PI",
-    "personal spending": "PCE",
+    "unemployment": {
+        "data_key": "unemployment", 
+        "name": "Unemployment Rate", 
+        "column": "LRUN64TTUSQ156S",
+        "unit": "%",
+        "description": "the percentage of the labor force that is jobless and actively seeking employment",
+        "change_type": "percentage_point"  # Use percentage point change (subtract)
+    },
+    "unemployment rate": {
+        "data_key": "unemployment", 
+        "name": "Unemployment Rate", 
+        "column": "LRUN64TTUSQ156S",
+        "unit": "%",
+        "description": "the percentage of the labor force that is jobless and actively seeking employment",
+        "change_type": "percentage_point"  # Use percentage point change (subtract)
+    },
+    "gdp": {
+        "data_key": "rgdp", 
+        "name": "Real GDP", 
+        "column": "GDPC1",
+        "unit": "billion dollars",
+        "description": "the inflation-adjusted value of all goods and services produced by the economy",
+        "change_type": "absolute"  # Use absolute change (subtract)
+    },
+    "real gdp": {
+        "data_key": "rgdp", 
+        "name": "Real GDP", 
+        "column": "GDPC1",
+        "unit": "billion dollars",
+        "description": "the inflation-adjusted value of all goods and services produced by the economy",
+        "change_type": "absolute"  # Use absolute change (subtract)
+    },
+    "industrial production": {
+        "data_key": "industrial_production", 
+        "name": "Industrial Production", 
+        "column": "INDPRO",
+        "unit": "index (2017=100)",
+        "description": "a measure of output from manufacturing, mining, electric and gas utilities",
+        "change_type": "percentage"  # Use percentage change
+    },
+    "investment": {
+        "data_key": "investment", 
+        "name": "Gross Private Domestic Investment", 
+        "column": "GPDI",
+        "unit": "billion dollars",
+        "description": "the measurement of physical investment used in GDP",
+        "change_type": "absolute"  # Use absolute change (subtract)
+    },
+    "consumption": {
+        "data_key": "consumption", 
+        "name": "Personal Consumption Expenditures", 
+        "column": "PCE",
+        "unit": "billion dollars",
+        "description": "a measure of consumer spending on goods and services",
+        "change_type": "absolute"  # Use absolute change (subtract)
+    },
+    "personal consumption": {
+        "data_key": "consumption", 
+        "name": "Personal Consumption Expenditures", 
+        "column": "PCE",
+        "unit": "billion dollars",
+        "description": "a measure of consumer spending on goods and services",
+        "change_type": "absolute"  # Use absolute change (subtract)
+    }
 }
+
+# Load data at startup
+ECONOMIC_DATA = load_csv_files()
 
 def record_audio(seconds=RECORD_SECONDS):
     """Record audio from microphone and save to a temporary file"""
@@ -128,7 +189,6 @@ def speak(text):
 def extract_indicators(command):
     """Extract economic indicators mentioned in the command"""
     indicators = []
-    tokens = word_tokenize(command)
     
     for indicator in INDICATORS.keys():
         if indicator in command:
@@ -141,6 +201,10 @@ def extract_timeframe(command):
     # Default timeframe: 1 year
     years = 1
     months = 0
+    
+    # Check for "all" or "entire" dataset
+    if "all" in command or "entire" in command or "last 10 years" in command:
+        return 10, 0  # Return the entire dataset (approximately 10 years)
     
     # Check for years
     year_match = re.search(r'(\d+)\s+year', command)
@@ -156,7 +220,7 @@ def extract_timeframe(command):
     if "last year" in command and not year_match:
         years = 1
     if "last month" in command and not month_match:
-        months = 1
+        months = 3  # Use last quarter since data is quarterly
         years = 0
     
     # Calculate observation date range
@@ -165,25 +229,48 @@ def extract_timeframe(command):
     else:
         return 1, 0  # Default to 1 year
 
-def get_fred_data(series_id, years, months):
-    """Get data from FRED API"""
+def get_data_for_indicator(indicator, years, months):
+    """Get data for an indicator over the specified timeframe"""
+    if not ECONOMIC_DATA:
+        print("Economic data not loaded")
+        return None
+    
     try:
-        # Calculate observation period
-        end_date = 'today'
-        observation_period = years * 12 + months
+        indicator_info = INDICATORS[indicator]
+        data_key = indicator_info["data_key"]
+        column = indicator_info["column"]
         
-        # Get data
-        data = fred.get_series(series_id, end=end_date, observation_period=observation_period)
+        # Get data from the loaded CSV
+        df = ECONOMIC_DATA[data_key]
+        
+        # Sort by date to ensure proper order
+        df = df.sort_index()
+        
+        # If we want all data, return all
+        if years >= 10:
+            return df[column]
+        
+        # Calculate the date range
+        now = datetime.now()
+        quarters = years * 4 + (months // 3)
+        if quarters < 1:
+            quarters = 1
+            
+        # Take the last N quarters of data
+        data = df[column].iloc[-quarters:]
+        
         return data
     except Exception as e:
-        print(f"Error getting FRED data: {e}")
+        print(f"Error retrieving data for {indicator}: {e}")
         return None
 
-def plot_data(data, title):
+def plot_data(data, title, y_label=None):
     """Plot data and save to file"""
     plt.figure(figsize=(10, 6))
     plt.plot(data)
     plt.title(title)
+    if y_label:
+        plt.ylabel(y_label)
     plt.grid(True)
     plt.tight_layout()
     
@@ -194,20 +281,138 @@ def plot_data(data, title):
     
     return filename
 
+def get_current_summary():
+    """Generate a summary of current economic conditions based on the latest data"""
+    if not ECONOMIC_DATA:
+        return "Sorry, economic data is not available."
+    
+    summary = "Here's a summary of current economic conditions: "
+    
+    try:
+        # Get latest values
+        unemployment = ECONOMIC_DATA["unemployment"]["LRUN64TTUSQ156S"].iloc[-1]
+        rgdp = ECONOMIC_DATA["rgdp"]["GDPC1"].iloc[-1]
+        
+        # Calculate recent GDP growth (last quarter)
+        gdp_growth_dollars = ECONOMIC_DATA["rgdp"]["GDPC1"].iloc[-1] - ECONOMIC_DATA["rgdp"]["GDPC1"].iloc[-2]
+        
+        # Add to summary
+        summary += f"The current unemployment rate is {unemployment:.1f}%. "
+        summary += f"Real GDP is at {rgdp:.1f} billion dollars, "
+        summary += f"with {gdp_growth_dollars:.1f} billion dollars growth in the last quarter. "
+        
+        return summary
+    except Exception as e:
+        print(f"Error generating economic summary: {e}")
+        return "I'm having trouble summarizing the current economic data."
+
+def compare_to_historical(indicator, data):
+    """Generate comparison to historical highs, lows, and averages"""
+    # Get full dataset
+    indicator_info = INDICATORS[indicator]
+    data_key = indicator_info["data_key"]
+    column = indicator_info["column"]
+    full_data = ECONOMIC_DATA[data_key][column]
+    
+    current = data.iloc[-1]
+    historical_max = full_data.max()
+    historical_min = full_data.min()
+    historical_avg = full_data.mean()
+    
+    percentile = (full_data < current).mean() * 100
+    
+    # Get 2019 pre-pandemic average for comparison
+    pre_pandemic = full_data['2019'].mean()
+    
+    # Handle different types of changes
+    if indicator_info["change_type"] == "percentage_point":
+        vs_pre_pandemic = current - pre_pandemic
+        vs_pre_text = f"{abs(vs_pre_pandemic):.1f} percentage points"
+    elif indicator_info["change_type"] == "absolute":
+        vs_pre_pandemic = current - pre_pandemic
+        vs_pre_text = f"{abs(vs_pre_pandemic):.1f} {indicator_info['unit']}"
+    else:  # percentage
+        vs_pre_pandemic = ((current / pre_pandemic) - 1) * 100
+        vs_pre_text = f"{abs(vs_pre_pandemic):.1f}%"
+    
+    comparison = f"The current value of {current:.2f} {indicator_info['unit']} "
+    
+    if abs(current - historical_max) < 0.01 * historical_max:
+        comparison += "is near the historical high "
+    elif abs(current - historical_min) < 0.01 * historical_max:
+        comparison += "is near the historical low "
+    else:
+        comparison += f"is at the {percentile:.0f}th percentile "
+    
+    comparison += f"compared to the last 10 years. "
+    comparison += f"The historical average is {historical_avg:.2f} {indicator_info['unit']}. "
+    
+    # Report the change compared to pre-pandemic
+    if indicator_info["change_type"] == "percentage_point" or indicator_info["change_type"] == "absolute":
+        if vs_pre_pandemic > 0:
+            comparison += f"It is {vs_pre_text} higher than before the pandemic. "
+        else:
+            comparison += f"It is {vs_pre_text} lower than before the pandemic. "
+    else:  # percentage
+        if vs_pre_pandemic > 0:
+            comparison += f"It is {vs_pre_text} higher than before the pandemic. "
+        else:
+            comparison += f"It is {vs_pre_text} lower than before the pandemic. "
+    
+    return comparison
+
+def format_change(indicator, latest_value, earliest_value):
+    """Format change between values according to indicator type"""
+    indicator_info = INDICATORS[indicator]
+    
+    # Handle different types of changes
+    if indicator_info["change_type"] == "percentage_point":
+        # For percentage point indicators like unemployment rate
+        change_value = latest_value - earliest_value
+        if change_value >= 0:
+            return f"It has increased by {change_value:.1f} percentage points"
+        else:
+            return f"It has decreased by {abs(change_value):.1f} percentage points"
+    
+    elif indicator_info["change_type"] == "absolute":
+        # For absolute value indicators like GDP
+        change_value = latest_value - earliest_value
+        if change_value >= 0:
+            return f"It has increased by {change_value:.1f} {indicator_info['unit']}"
+        else:
+            return f"It has decreased by {abs(change_value):.1f} {indicator_info['unit']}"
+    
+    else:  # "percentage" - default percentage change
+        # For percentage change indicators like industrial production
+        pct_change = ((latest_value - earliest_value) / earliest_value) * 100 if earliest_value != 0 else 0
+        if pct_change >= 0:
+            return f"It has increased by {pct_change:.1f}%"
+        else:
+            return f"It has decreased by {abs(pct_change):.1f}%"
+
 def process_command(command):
-    """Process voice command and respond with FRED data"""
+    """Process voice command and respond with economic data"""
     if not command:
-        return
+        return True
     
     # Check for exit command
     if "exit" in command or "quit" in command:
         speak("Goodbye!")
         return False
     
+    # Check for help command
+    if "help" in command or "what can you do" in command:
+        help_text = "I can provide economic data on unemployment, GDP, industrial production, investment, and consumption. "
+        help_text += "You can ask questions like: 'What is the current unemployment rate?', "
+        help_text += "'How has GDP changed over the last 5 years?', or "
+        help_text += "'Compare industrial production to historical data'. "
+        speak(help_text)
+        return True
+    
     # Extract indicators
     indicators = extract_indicators(command)
     if not indicators:
-        speak("I couldn't identify any economic indicators in your request. Please mention specific indicators like unemployment rate, inflation, or GDP.")
+        speak("I couldn't identify any economic indicators in your request. Please mention specific indicators like unemployment rate, GDP, industrial production, investment, or consumption.")
         return True
     
     # Extract timeframe
@@ -220,84 +425,47 @@ def process_command(command):
             timeframe_text = f"{months} month{'s' if months != 1 else ''}"
     
     for indicator in indicators:
-        series_id = INDICATORS[indicator]
+        indicator_info = INDICATORS[indicator]
+        indicator_name = indicator_info["name"]
         
-        # Special handling for yield curve
-        if indicator == "yield curve":
-            speak(f"Retrieving {indicator} data for the past {timeframe_text}...")
-            try:
-                ten_year = get_fred_data(series_id["10-year"], years, months)
-                two_year = get_fred_data(series_id["2-year"], years, months)
-                
-                # Calculate spread
-                spread = ten_year - two_year
-                
-                # Create DataFrame for plotting
-                df = pd.DataFrame({
-                    "10-Year Treasury": ten_year,
-                    "2-Year Treasury": two_year,
-                    "Spread (10Y-2Y)": spread
-                })
-                
-                plt.figure(figsize=(12, 8))
-                plt.subplot(2, 1, 1)
-                plt.plot(df["10-Year Treasury"], label="10-Year Treasury")
-                plt.plot(df["2-Year Treasury"], label="2-Year Treasury")
-                plt.title("Treasury Yields")
-                plt.grid(True)
-                plt.legend()
-                
-                plt.subplot(2, 1, 2)
-                plt.plot(df["Spread (10Y-2Y)"], color="green")
-                plt.axhline(y=0, color="red", linestyle="--")
-                plt.title("Yield Curve Spread (10Y-2Y)")
-                plt.grid(True)
-                
-                plt.tight_layout()
-                filename = "yield_curve.png"
-                plt.savefig(filename)
-                plt.close()
-                
-                latest_10y = ten_year.iloc[-1] if not ten_year.empty else "N/A"
-                latest_2y = two_year.iloc[-1] if not two_year.empty else "N/A"
-                latest_spread = spread.iloc[-1] if not spread.empty else "N/A"
-                
-                speak(f"The current 10-year Treasury yield is {latest_10y:.2f}% and the 2-year yield is {latest_2y:.2f}%. "
-                      f"The spread is {latest_spread:.2f}%. I've saved a chart as {filename}.")
-                
-            except Exception as e:
-                speak(f"Sorry, I encountered an error retrieving yield curve data: {e}")
+        speak(f"Retrieving {indicator_name} data for the past {timeframe_text}...")
+        data = get_data_for_indicator(indicator, years, months)
+        
+        if data is not None and not data.empty:
+            # Plot data
+            title = f"{indicator_name} - Past {timeframe_text}"
+            y_label = f"{indicator_name} ({indicator_info['unit']})"
+            filename = plot_data(data, title, y_label)
             
+            # Get latest value and format change
+            latest_value = data.iloc[-1]
+            earliest_value = data.iloc[0]
+            change_text = format_change(indicator, latest_value, earliest_value)
+            
+            # Generate response
+            response = f"The current {indicator_name} is {latest_value:.2f} {indicator_info['unit']}. "
+            response += f"{change_text} over the past {timeframe_text}. "
+            
+            # Add historical comparison if requested
+            if "compare" in command or "historical" in command or "history" in command or "past" in command:
+                response += compare_to_historical(indicator, data)
+                
+            response += f"{indicator_info['description'].capitalize()}. "
+            response += f"I've saved a chart as {filename}."
+            speak(response)
         else:
-            speak(f"Retrieving {indicator} data for the past {timeframe_text}...")
-            data = get_fred_data(series_id, years, months)
-            
-            if data is not None and not data.empty:
-                # Plot data
-                title = f"{indicator.title()} - Past {timeframe_text}"
-                filename = plot_data(data, title)
-                
-                # Get latest value and percent change
-                latest_value = data.iloc[-1]
-                earliest_value = data.iloc[0]
-                pct_change = ((latest_value - earliest_value) / earliest_value) * 100 if earliest_value != 0 else 0
-                
-                # Generate response
-                response = f"The current {indicator} is {latest_value:.2f}. "
-                if pct_change >= 0:
-                    response += f"It has increased by {pct_change:.2f}% over the past {timeframe_text}."
-                else:
-                    response += f"It has decreased by {abs(pct_change):.2f}% over the past {timeframe_text}."
-                    
-                response += f" I've saved a chart as {filename}."
-                speak(response)
-            else:
-                speak(f"Sorry, I couldn't retrieve data for {indicator}.")
+            speak(f"Sorry, I couldn't retrieve data for {indicator_name}.")
     
     return True
 
 def main():
-    speak("Blind Trading Assistant activated. How can I help you with economic data today?")
+    if not ECONOMIC_DATA:
+        speak("Warning: I couldn't load the economic data files. Please check that the CSV files are in the current directory.")
+        return
+    
+    # Provide a summary of current economic conditions on startup
+    summary = get_current_summary()
+    speak("Blind Trading Assistant activated. " + summary + " How can I help you today?")
     
     running = True
     while running:
