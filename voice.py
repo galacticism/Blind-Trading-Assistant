@@ -232,22 +232,14 @@ def record_audio_with_silence_detection():
     max_frames = int(RATE / CHUNK * MAX_RECORD_SECONDS)
     min_speech_frames = int(RATE / CHUNK * MIN_SPEECH_DURATION)
     
-    # Calibrate silence threshold based on ambient noise
-    print("Calibrating for ambient noise... please be quiet for a moment")
-    ambient_noise_level = []
-    for _ in range(int(RATE / CHUNK * 2)):  # 2 seconds of ambient noise
-        data = stream.read(CHUNK, exception_on_overflow=False)
-        ambient_noise_level.append(audioop.rms(data, 2))
-    
-    # Set dynamic threshold based on ambient noise
-    dynamic_threshold = max(SILENCE_THRESHOLD, sum(ambient_noise_level) / len(ambient_noise_level) * 2.5)
-    print(f"Dynamic threshold set to: {dynamic_threshold}")
+    # Use fixed threshold of 500 instead of calibration
+    fixed_threshold = SILENCE_THRESHOLD  # 500
     
     # wait to process until you hear speech, don't want to repeatedly process silence for no reason
     silent_count = 0
     while True:
         data = stream.read(CHUNK, exception_on_overflow=False)
-        if not is_silent(data, dynamic_threshold):
+        if not is_silent(data, fixed_threshold):
             break
         silent_count += 1
         # If silence for too long, prompt user with something to make sure they're not afk
@@ -262,7 +254,7 @@ def record_audio_with_silence_detection():
         data = stream.read(CHUNK, exception_on_overflow=False)
         frames.append(data)
         
-        if is_silent(data, dynamic_threshold):
+        if is_silent(data, fixed_threshold):
             silent_frames += 1
             if silent_frames >= int(SILENCE_DURATION * RATE / CHUNK):
                 break
