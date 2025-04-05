@@ -45,6 +45,7 @@ def load_csv_files():
         data["industrial_production"] = pd.read_csv("Industrial Production.csv", parse_dates=["observation_date"], index_col="observation_date")
         data["investment"] = pd.read_csv("GPDI.csv", parse_dates=["observation_date"], index_col="observation_date")
         data["consumption"] = pd.read_csv("Personal Consumption Expenditures.csv", parse_dates=["observation_date"], index_col="observation_date")
+        data["cpi"] = pd.read_csv("CPI.csv", parse_dates=["observation_date"], index_col="observation_date")
         
         print("CSV files loaded successfully")
         return data
@@ -117,6 +118,30 @@ INDICATORS = {
         "unit": "billion dollars",
         "description": "a measure of consumer spending on goods and services",
         "change_type": "absolute"  # Use absolute change (subtract)
+    },
+    "cpi": {
+        "data_key": "cpi", 
+        "name": "Consumer Price Index", 
+        "column": "CPALTT01USQ657N",
+        "unit": "%",
+        "description": "a measure of the average change over time in the prices paid by consumers for a basket of goods and services",
+        "change_type": "percentage"  # Use percentage change
+    },
+    "inflation": {
+        "data_key": "cpi", 
+        "name": "Consumer Price Index", 
+        "column": "CPALTT01USQ657N",
+        "unit": "%",
+        "description": "a measure of the average change over time in the prices paid by consumers for a basket of goods and services",
+        "change_type": "percentage"  # Use percentage change
+    },
+    "consumer price index": {
+        "data_key": "cpi", 
+        "name": "Consumer Price Index", 
+        "column": "CPALTT01USQ657N",
+        "unit": "%",
+        "description": "a measure of the average change over time in the prices paid by consumers for a basket of goods and services",
+        "change_type": "percentage"  # Use percentage change
     }
 }
 
@@ -223,11 +248,11 @@ def extract_timeframe(command):
         months = 3  # Use last quarter since data is quarterly
         years = 0
     
-    # Calculate observation date range
-    if years > 0 or months > 0:
-        return years, months
-    else:
-        return 1, 0  # Default to 1 year
+    # Force a minimum reasonable timeframe
+    if years == 0 and months == 0:
+        years = 1  # Default to 1 year
+        
+    return years, months
 
 def get_data_for_indicator(indicator, years, months):
     """Get data for an indicator over the specified timeframe"""
@@ -293,11 +318,18 @@ def get_current_summary():
         unemployment = ECONOMIC_DATA["unemployment"]["LRUN64TTUSQ156S"].iloc[-1]
         rgdp = ECONOMIC_DATA["rgdp"]["GDPC1"].iloc[-1]
         
+        # Get inflation data (CPI)
+        cpi_quarterly = ECONOMIC_DATA["cpi"]["CPALTT01USQ657N"]
+        
+        # Calculate annual inflation rate by summing the last 4 quarters of CPI data
+        annual_inflation = cpi_quarterly.iloc[-4:].sum()
+        
         # Calculate recent GDP growth (last quarter)
         gdp_growth_dollars = ECONOMIC_DATA["rgdp"]["GDPC1"].iloc[-1] - ECONOMIC_DATA["rgdp"]["GDPC1"].iloc[-2]
         
         # Add to summary
         summary += f"The current unemployment rate is {unemployment:.1f}%. "
+        summary += f"Annual inflation is running at {annual_inflation:.1f}%. "
         summary += f"Real GDP is at {rgdp:.1f} billion dollars, "
         summary += f"with {gdp_growth_dollars:.1f} billion dollars growth in the last quarter. "
         
@@ -306,7 +338,7 @@ def get_current_summary():
         print(f"Error generating economic summary: {e}")
         return "I'm having trouble summarizing the current economic data."
 
-def compare_to_historical(indicator, data):
+def compare_to_historical(indicator, data, timeframe_text):
     """Generate comparison to historical highs, lows, and averages"""
     # Get full dataset
     indicator_info = INDICATORS[indicator]
@@ -390,6 +422,14 @@ def format_change(indicator, latest_value, earliest_value):
         else:
             return f"It has decreased by {abs(pct_change):.1f}%"
 
+def calculate_annual_inflation(data, periods=4):
+    """Calculate annual inflation rate from quarterly CPI data"""
+    if len(data) < periods:
+        return data.sum()  # If we have less than a year's data, return what we have
+    
+    # Sum the most recent periods (quarters) to get annual rate
+    return data.iloc[-periods:].sum()
+
 def process_command(command):
     """Process voice command and respond with economic data"""
     if not command:
@@ -437,18 +477,43 @@ def process_command(command):
             y_label = f"{indicator_name} ({indicator_info['unit']})"
             filename = plot_data(data, title, y_label)
             
-            # Get latest value and format change
+            # Get latest value and earliest value in the requested timeframe
             latest_value = data.iloc[-1]
             earliest_value = data.iloc[0]
-            change_text = format_change(indicator, latest_value, earliest_value)
             
-            # Generate response
-            response = f"The current {indicator_name} is {latest_value:.2f} {indicator_info['unit']}. "
-            response += f"{change_text} over the past {timeframe_text}. "
+            # Special handling for CPI (inflation) data
+            if indicator in ["cpi", "inflation", "consumer price index"]:
+                # For CPI, calculate annualized rates
+                if len(data) >= 8:  # At least 2 years of quarterly data
+                    # Calculate the annual inflation rate for the most recent year
+                    annual_inflation_current = calculate_annual_inflation(data.iloc[-4:])
+                    
+                    if years > 1:
+                        # Calculate the annual inflation rate for the earliest year in the timeframe
+                        annual_inflation_start = calculate_annual_inflation(data.iloc[:4])
+                        change_text = format_change(indicator, annual_inflation_current, annual_inflation_start)
+                        response = f"The current annual inflation rate is {annual_inflation_current:.1f}%. "
+                        response += f"{change_text} compared to {years} years ago. "
+                    else:
+                        # Compare current annual rate to the previous year
+                        annual_inflation_previous = calculate_annual_inflation(data.iloc[-8:-4])
+                        change_text = format_change(indicator, annual_inflation_current, annual_inflation_previous)
+                        response = f"The current annual inflation rate is {annual_inflation_current:.1f}%. "
+                        response += f"{change_text} compared to the previous year. "
+                else:
+                    # Use regular format_change for shorter timeframes
+                    change_text = format_change(indicator, latest_value, earliest_value)
+                    response = f"The current quarterly inflation rate is {latest_value:.2f}%. "
+                    response += f"{change_text} over the past {timeframe_text}. "
+            else:
+                # Normal handling for other indicators - always compare first and last values of the requested timeframe
+                change_text = format_change(indicator, latest_value, earliest_value)
+                response = f"The current {indicator_name} is {latest_value:.2f} {indicator_info['unit']}. "
+                response += f"{change_text} over the past {timeframe_text}. "
             
             # Add historical comparison if requested
             if "compare" in command or "historical" in command or "history" in command or "past" in command:
-                response += compare_to_historical(indicator, data)
+                response += compare_to_historical(indicator, data, timeframe_text)
                 
             response += f"{indicator_info['description'].capitalize()}. "
             response += f"I've saved a chart as {filename}."
